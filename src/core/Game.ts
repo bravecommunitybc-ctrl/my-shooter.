@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { BotManager, type ObjectiveView } from '../ai/BotManager';
+import { NavGraph } from '../ai/NavGraph';
 import { CONFIG, type Team } from '../config';
 import { Actor } from '../entities/Actor';
 import { ActorModel } from '../entities/ActorModel';
@@ -24,11 +26,6 @@ const _v = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 
-/** Training dummies until bots land (stage 3). */
-const DUMMY_SPOTS: [number, number, number][] = [
-  [0, 0, 20], [3, 0, 28], [-3, 0, 12.5], [-42.5, 0, 26], [42.5, 0, 24.5],
-];
-
 /**
  * Owns the renderer, the world and every system; runs a fixed-step
  * simulation (CONFIG.sim.tickRate) with interpolated rendering.
@@ -49,7 +46,16 @@ export class Game {
   actors: Actor[] = [];
   player: Player | null = null;
   private readonly models = new Map<Actor, ActorModel>();
-  private readonly respawnAt = new Map<Actor, number>();
+  nav!: NavGraph;
+  bots!: BotManager;
+  /** actor whose eyes the camera uses while the player is dead */
+  private spectating: Actor | null = null;
+  /** stage-3 skirmish loop: when to reset positions */
+  private resetAt = 0;
+  private specFireHeld = false;
+  private readonly objective: ObjectiveView = {
+    live: true, bomb: 'none', bombPos: new THREE.Vector3(), carrier: null, plantedSite: null, roundTime: 0,
+  };
 
   private readonly menu: Menu;
   private readonly hud: Hud;
@@ -105,6 +111,12 @@ export class Game {
     const built = buildMap(this.map, this.world, this.renderer.capabilities.getMaxAnisotropy());
     this.scene.add(built.group);
     this.renderer.shadowMap.needsUpdate = true;
+    this.nav = new NavGraph(this.map, this.world);
+    this.bots = new BotManager(this.map, this.nav, this.world, this.weapons, () => this.actors, this.events);
+    if (import.meta.env.DEV) {
+      const comps = this.nav.components();
+      if (comps.length > 1) console.warn('[nav] disconnected waypoint groups:', comps.map((c) => c.map((i) => this.map.waypoints[i].pos.join(','))));
+    }
     this.resize();
     requestAnimationFrame(this.frame);
   }
@@ -129,9 +141,6 @@ export class Game {
         rel = Math.atan2(Math.sin(rel), Math.cos(rel));
         this.hud.hurt(rel, this.realTime);
       }
-    });
-    ev.on('kill', (e) => {
-      if (e.victim.isBot) this.respawnAt.set(e.victim, this.time + 3);
     });
     ev.on('land', (e) => {
       if (this.player && e.actor === this.player.actor) this.viewModel.onLand(e.speed);
@@ -160,37 +169,51 @@ export class Game {
 
   private startMatch(): void {
     this.clearMatch();
+    const skill = CONFIG.bots.difficulty[this.settings.difficulty];
     const me = this.spawnActor('Вы', this.settings.side, false);
     this.player = new Player(me, this.input);
-    const sp = this.map.spawns[me.team][0];
-    this.placeActor(me, sp.pos[0], sp.pos[1], sp.pos[2], sp.yaw);
-    this.weapons.give(me, 'kestrel', this.time, false);
-    this.weapons.switchTo(me, 'primary', this.time, true);
     this.viewModel.setTeam(me.team);
-
+    const names = [...CONFIG.bots.names].sort(() => Math.random() - 0.5);
     const enemy: Team = me.team === 'attack' ? 'defend' : 'attack';
-    DUMMY_SPOTS.forEach((p, i) => {
-      const d = this.spawnActor(`Манекен ${i + 1}`, enemy, true);
-      d.armor = i % 2 ? 100 : 0;
-      d.helmet = i % 2 === 1;
-      this.placeActor(d, p[0], p[1], p[2], 0);
-    });
+    for (let i = 0; i < 4; i++) this.bots.add(this.spawnActor(names.pop() ?? `Bot ${i}`, me.team, true), skill);
+    for (let i = 0; i < 5; i++) this.bots.add(this.spawnActor(names.pop() ?? `Bot ${i + 4}`, enemy, true), skill);
+    this.startSkirmishRound();
 
     this.mode = 'playing';
     this.menu.hide();
     this.hud.setVisible(true);
-    this.hud.message('Тренировка', 2.5, this.realTime, 'Манекены с чётным номером — в броне и шлеме');
     this.input.capture = true;
     this.input.clearPresses();
     this.enterFullscreenIfWanted();
     this.input.requestLock();
   }
 
+  /** stage-3 loop: everyone back to spawn with a rifle */
+  private startSkirmishRound(): void {
+    const idx: Record<Team, number> = { attack: 0, defend: 0 };
+    for (const a of this.actors) {
+      const spawns = this.map.spawns[a.team];
+      const sp = spawns[idx[a.team]++ % spawns.length];
+      this.placeActor(a, sp.pos[0], sp.pos[1], sp.pos[2], sp.yaw);
+      a.armor = 100;
+      a.helmet = true;
+      a.loadout.secondary?.refill();
+      if (a.isBot && idx[a.team] === 2) this.weapons.give(a, 'longbow', this.time);
+      else this.weapons.give(a, 'kestrel', this.time);
+      a.weapon.resetState();
+    }
+    this.bots.newRound();
+    this.spectating = null;
+    this.resetAt = 0;
+    this.hud.message('Бой', 1.5, this.realTime, `Цель атаки ботов: ${this.bots.targetSite.name}`);
+  }
+
   private clearMatch(): void {
     for (const m of this.models.values()) this.scene.remove(m.group);
     this.models.clear();
-    this.respawnAt.clear();
+    this.bots?.clear();
     this.actors = [];
+    this.spectating = null;
     this.player = null;
     this.time = 0;
     this.acc = 0;
@@ -280,28 +303,74 @@ export class Game {
     this.time += dt;
     const t = this.time;
     this.player?.readIntent(false);
+    this.objective.roundTime = t;
+    this.bots.update(dt, t, this.objective, false);
 
     for (const a of this.actors) {
       a.prevPos.copy(a.pos);
       if (!a.alive) continue;
       const r = stepMovement(a, a.intent, dt, this.world, this.weapons.mobility(a));
       if (r.landedSpeed > 2) this.events.emit('land', { actor: a, speed: r.landedSpeed });
+      this.trackFootsteps(a, dt);
     }
     separateActors(this.actors, this.world);
     for (const a of this.actors) a.updateHitboxes();
     for (const a of this.actors) this.weapons.update(a, dt, t);
 
-    // training dummies come back
-    for (const [a, at] of this.respawnAt) {
-      if (t >= at) {
-        this.respawnAt.delete(a);
-        const i = this.actors.indexOf(a) - 1;
-        const p = DUMMY_SPOTS[Math.max(0, i) % DUMMY_SPOTS.length];
-        const armor = a.armor;
-        this.placeActor(a, p[0], p[1], p[2], 0);
-        a.armor = i % 2 ? 100 : armor;
-        a.helmet = i % 2 === 1;
+    // skirmish: reset when a team is wiped out
+    if (!this.resetAt) {
+      const aliveA = this.actors.some((a) => a.alive && a.team === 'attack');
+      const aliveD = this.actors.some((a) => a.alive && a.team === 'defend');
+      if (!aliveA || !aliveD) {
+        this.resetAt = t + 4;
+        this.hud.message(aliveA ? 'Атака победила' : 'Защита победила', 3, this.realTime);
       }
+    } else if (t >= this.resetAt) {
+      this.startSkirmishRound();
+    }
+    this.updateSpectator();
+  }
+
+  /** dev/testing: advance the simulation without rendering */
+  simulate(seconds: number): void {
+    const n = Math.round(seconds / this.fixedDt);
+    for (let i = 0; i < n; i++) this.tick(this.fixedDt);
+  }
+
+  /** footstep events for audio + bot hearing (walking/crouching is silent) */
+  private trackFootsteps(a: Actor, dt: number): void {
+    if (!a.onGround) return;
+    const speed = a.horizontalSpeed();
+    const loud = speed > CONFIG.movement.runSpeed * CONFIG.movement.walkMul * 1.12;
+    if (!loud) {
+      a.stepDist = 0;
+      return;
+    }
+    a.stepDist += speed * dt;
+    if (a.stepDist > 2.1) {
+      a.stepDist = 0;
+      this.events.emit('footstep', { actor: a, loud });
+    }
+  }
+
+  private updateSpectator(): void {
+    const me = this.player?.actor;
+    if (!me || me.alive) {
+      this.spectating = null;
+      return;
+    }
+    const firing = me.weaponIntent.fire;
+    const cycle = firing && !this.specFireHeld;
+    this.specFireHeld = firing;
+    if (!this.spectating || !this.spectating.alive || cycle) {
+      const alive = this.actors.filter((a) => a.alive && a.team === me.team && a !== me);
+      const pool = alive.length ? alive : this.actors.filter((a) => a.alive);
+      if (!pool.length) {
+        this.spectating = null;
+        return;
+      }
+      const cur = this.spectating ? pool.indexOf(this.spectating) : -1;
+      this.spectating = pool[(cur + 1) % pool.length];
     }
   }
 
@@ -320,7 +389,17 @@ export class Game {
       const w = a.weapon;
       p.kickPitch = w.recoilPitch * w.stats.recoil.viewKick + this.viewModel.cameraPunch;
       p.kickYaw = w.recoilYaw * w.stats.recoil.viewKick;
-      p.updateCamera(this.camera, alpha);
+      const spec = !a.alive ? this.spectating : null;
+      if (spec) {
+        spec.eyePosition(this.camera.position);
+        _v.lerpVectors(spec.prevPos, spec.pos, alpha);
+        this.camera.position.set(_v.x, _v.y + spec.eyeHeight, _v.z);
+        this.camera.rotation.set(spec.pitch, spec.yaw, 0, 'YXZ');
+        this.hud.setSpectate(`Наблюдение: ${spec.name} (${spec.hp} HP) · ЛКМ — следующий`);
+      } else {
+        p.updateCamera(this.camera, alpha);
+        this.hud.setSpectate(a.alive ? '' : 'Вы погибли');
+      }
       const fov = w.scoped && w.stats.scope ? w.stats.scope.fov : this.settings.fov;
       if (this.camera.fov !== fov) {
         this.camera.fov = fov;
@@ -341,7 +420,7 @@ export class Game {
     }
 
     for (const [a, m] of this.models) {
-      const hidden = p !== null && a === p.actor;
+      const hidden = p !== null && (a === p.actor || (a === this.spectating && !p.actor.alive));
       m.group.visible = !hidden;
       if (!hidden) m.update(a, alpha, this.mode === 'playing' ? dt : 0);
     }

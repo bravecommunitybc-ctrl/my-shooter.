@@ -142,8 +142,8 @@ export const QUARRY: MapDef = {
     { text: 'MID', pos: [0, 5.5, -3.98], rotY: 0, size: 2.2, color: '#e8e1d0' },
   ],
   sites: [
-    { name: 'A', min: [-44, -44], max: [-26, -24] },
-    { name: 'B', min: [26, -46], max: [45, -24] },
+    { name: 'A', min: [-44, -44], max: [-26, -24], entrances: [[-22, -16], [-42.5, -12], [-22, -53]] },
+    { name: 'B', min: [26, -46], max: [45, -24], entrances: [[22, -42], [42.5, -12], [22, -53]] },
   ],
   spawns: {
     attack: [

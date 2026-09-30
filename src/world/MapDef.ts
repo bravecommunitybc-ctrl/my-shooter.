@@ -18,6 +18,8 @@ export interface Rect {
 
 export interface SiteDef extends Rect {
   name: 'A' | 'B';
+  /** xz points where enemies enter the site (used for bots holding angles) */
+  entrances: [number, number][];
 }
 
 export interface WaypointDef {
