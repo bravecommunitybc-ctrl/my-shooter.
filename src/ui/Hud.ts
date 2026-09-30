@@ -60,12 +60,15 @@ export class Hud {
   private readonly spectate: HTMLDivElement;
   private readonly rewardEl: HTMLDivElement;
   private rewardUntil = 0;
+  private readonly tagLayer: HTMLDivElement;
+  private readonly tags: HTMLDivElement[] = [];
   private hitUntil = 0;
   private damageUntil = 0;
   private cache = new Map<string, string>();
 
   constructor(parent: HTMLElement, settings: Settings) {
     this.root = div(parent, 'hud');
+    this.tagLayer = div(this.root, 'hud-tags');
     this.scope = div(this.root, 'hud-scope');
     div(this.scope, 'scope-h');
     div(this.scope, 'scope-v');
@@ -228,6 +231,23 @@ export class Hud {
   setSpectate(text: string): void {
     this.set('spec', this.spectate, text);
     this.spectate.style.display = text ? 'block' : 'none';
+  }
+
+  /** teammate name tags in screen pixels */
+  setNameTags(list: { x: number; y: number; text: string; low: boolean }[]): void {
+    while (this.tags.length < list.length) this.tags.push(div(this.tagLayer, 'name-tag'));
+    for (let i = 0; i < this.tags.length; i++) {
+      const el = this.tags[i];
+      const t = list[i];
+      if (!t) {
+        if (el.style.display !== 'none') el.style.display = 'none';
+        continue;
+      }
+      el.style.display = 'block';
+      el.style.transform = `translate(${Math.round(t.x)}px, ${Math.round(t.y)}px) translate(-50%, -100%)`;
+      if (el.textContent !== t.text) el.textContent = t.text;
+      el.classList.toggle('low', t.low);
+    }
   }
 
   reward(text: string, now: number): void {

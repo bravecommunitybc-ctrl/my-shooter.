@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BotManager } from '../ai/BotManager';
+import { Sfx } from '../audio/Sfx';
 import { NavGraph } from '../ai/NavGraph';
 import { CONFIG, TEAM_NAMES_RU, type Team } from '../config';
 import { Actor } from '../entities/Actor';
@@ -57,6 +58,7 @@ export class Game {
   readonly viewModel = new ViewModel();
   readonly round: RoundManager;
   readonly economy: Economy;
+  readonly sfx: Sfx;
 
   actors: Actor[] = [];
   player: Player | null = null;
@@ -107,6 +109,7 @@ export class Game {
     });
     this.scene.add(this.round.bomb.mesh);
     this.economy = new Economy(this.events, () => this.actors, this.weapons, () => this.time);
+    this.sfx = new Sfx(this.events, () => this.me, this.settings.volume);
 
     this.hud = new Hud(overlay, this.settings);
     this.hud.setVisible(false);
@@ -318,6 +321,7 @@ export class Game {
   }
 
   private startMatch(): void {
+    this.sfx.unlock();
     this.clearMatch();
     const skill = CONFIG.bots.difficulty[this.settings.difficulty];
     const me = this.spawnActor('Вы', this.settings.side, false);
@@ -355,6 +359,7 @@ export class Game {
   }
 
   private resume(): void {
+    this.sfx.unlock();
     this.mode = 'playing';
     this.menu.hide();
     this.input.capture = true;
@@ -400,6 +405,7 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.hud.applySettings(s);
     this.bots?.setSkill(CONFIG.bots.difficulty[s.difficulty]);
+    this.sfx.setVolume(s.volume);
   }
 
   // ─── loop ─────────────────────────────────────────────────────────
@@ -550,8 +556,15 @@ export class Game {
       }
     }
 
+    this.camera.getWorldDirection(_fwd);
+    this.sfx.updateListener(this.camera, _fwd);
+    this.updateNameTags();
+
     for (const [a, m] of this.models) {
-      const hidden = p !== null && (a === p.actor || (a === this.spectating && !p.actor.alive));
+      const cam = this.camera.position;
+      // never render a body the camera is (almost) inside
+      const tooClose = Math.hypot(a.pos.x - cam.x, a.pos.z - cam.z) < 0.75 && cam.y > a.pos.y && cam.y < a.pos.y + a.height + 0.3;
+      const hidden = p !== null && (a === p.actor || (a === this.spectating && !p.actor.alive) || tooClose);
       m.group.visible = !hidden;
       if (!hidden) m.update(a, alpha, this.mode === 'playing' ? dt : 0);
     }
@@ -560,6 +573,24 @@ export class Game {
 
     this.renderer.render(this.scene, this.camera);
     if (p && this.mode !== 'menu') this.viewModel.render(this.renderer, this.camera.aspect);
+  }
+
+  private updateNameTags(): void {
+    const me = this.me;
+    const list: { x: number; y: number; text: string; low: boolean }[] = [];
+    if (me && this.mode !== 'menu') {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      for (const a of this.actors) {
+        if (a === me || !a.alive || a.team !== me.team || a === this.spectating) continue;
+        _v.set(a.pos.x, a.pos.y + a.height + 0.35, a.pos.z);
+        if (_v.distanceTo(this.camera.position) > 60) continue;
+        _v.project(this.camera);
+        if (_v.z > 1 || _v.z < -1 || Math.abs(_v.x) > 1 || Math.abs(_v.y) > 1) continue;
+        list.push({ x: (_v.x * 0.5 + 0.5) * w, y: (-_v.y * 0.5 + 0.5) * h, text: `${a.name}${a.hasBomb ? ' ◆' : ''}`, low: a.hp <= 30 });
+      }
+    }
+    this.hud.setNameTags(list);
   }
 
   private updateHud(a: Actor): void {

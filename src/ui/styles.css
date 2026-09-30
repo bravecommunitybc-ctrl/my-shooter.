@@ -207,3 +207,7 @@ html, body {
 .sb-team tr.me td { background: rgba(255, 255, 255, 0.08); }
 .sb-team tr.dead td { color: var(--muted); }
 .hud-reward { position: absolute; left: 20px; bottom: 104px; font: 700 16px var(--font); color: var(--good); opacity: 0; transition: opacity 0.4s; }
+
+.hud-tags { position: absolute; inset: 0; }
+.name-tag { position: absolute; left: 0; top: 0; font-size: 12px; color: #bfe9ff; background: rgba(10, 12, 16, 0.45); padding: 1px 6px; white-space: nowrap; }
+.name-tag.low { color: var(--danger); }
