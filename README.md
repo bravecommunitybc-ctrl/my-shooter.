@@ -27,4 +27,12 @@ Open http://localhost:5173 and click **Играть**.
 Rules: 1:55 rounds, 15 s buy phase, the Pulse Charge detonates 40 s after the plant,
 defusing takes 10 s (5 s with a kit), first to 13 wins, sides swap after round 12.
 
+## Deploy
+
+`.github/workflows/deploy.yml` builds on every PR to `main` and publishes `dist/` to
+GitHub Pages on every push to `main`. The Vite `base` comes from `BASE_PATH`
+(set to `/<repo-name>/` in CI), so the game is served at
+`https://<owner>.github.io/<repo-name>/`.
+One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
 See `CLAUDE.md` for the architecture.

@@ -8,6 +8,9 @@ Only original names and assets: textures are procedural canvases, all audio is s
 - `npm install && npm run dev`: dev server at http://localhost:5173
 - `npm run build`: `tsc --noEmit` + production build. **Must pass after every change.**
 - `npm run typecheck`: types only
+- Deploy: `.github/workflows/deploy.yml` builds PRs and publishes `main` to GitHub Pages.
+  `vite.config.ts` reads `base` from `BASE_PATH` (CI sets `/<repo-name>/`); keep asset
+  URLs relative to the Vite pipeline (no hard-coded `/…` paths) so the subpath works.
 
 ## Layout
 ```
