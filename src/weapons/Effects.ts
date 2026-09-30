@@ -50,6 +50,9 @@ export class Effects {
 
   private readonly muzzleLight: THREE.PointLight;
   private muzzleTime = 0;
+  private readonly fireball: THREE.Mesh;
+  private readonly fireballMat: THREE.MeshBasicMaterial;
+  private fireballT = -1;
 
   constructor(
     scene: THREE.Scene,
@@ -109,13 +112,20 @@ export class Effects {
     this.muzzleLight = new THREE.PointLight(0xffc27a, 0, 9, 2);
     scene.add(this.muzzleLight);
 
+    this.fireballMat = new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.fireball = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), this.fireballMat);
+    this.fireball.visible = false;
+    scene.add(this.fireball);
+
     events.on('shot', (e) => {
       this.muzzleOf(e.shooter, _muzzle);
       if (e.weapon.id !== 'talon') {
         this.addTracer(_muzzle, e.end);
-        this.muzzleLight.position.copy(_muzzle);
-        this.muzzleLight.intensity = e.weapon.id === 'longbow' ? 60 : 30;
-        this.muzzleTime = 0.05;
+        if (this.fireballT < 0) {
+          this.muzzleLight.position.copy(_muzzle);
+          this.muzzleLight.intensity = e.weapon.id === 'longbow' ? 60 : 30;
+          this.muzzleTime = 0.05;
+        }
         this.burst(_muzzle, _z.set(0, 1, 0), 3, [1, 0.8, 0.4], 0.6, 0.05, 0);
       }
       if (e.hitActor) this.burst(e.end, _p.set(0, 0.3, 0), 10, [0.55, 0.04, 0.03], 2.2, 0.35, 9);
@@ -125,6 +135,20 @@ export class Effects {
       const metal = e.surface === 'metal';
       this.burst(e.point, e.normal, metal ? 7 : 8, metal ? [1, 0.75, 0.35] : [0.55, 0.5, 0.42], metal ? 4 : 1.8, metal ? 0.25 : 0.55, metal ? 12 : 3);
     });
+  }
+
+  /** Pulse Charge detonation */
+  explosion(pos: THREE.Vector3): void {
+    _p.set(0, 1, 0);
+    this.burst(pos, _p, 70, [1, 0.62, 0.25], 10, 0.9, 5);
+    this.burst(pos, _p, 60, [0.3, 0.27, 0.24], 4, 2.4, -0.4);
+    this.fireball.position.copy(pos);
+    this.fireball.visible = true;
+    this.fireballT = 0;
+    this.muzzleLight.position.set(pos.x, pos.y + 3, pos.z);
+    this.muzzleLight.distance = 60;
+    this.muzzleLight.intensity = 3000;
+    this.muzzleTime = 0.45;
   }
 
   addTracer(from: THREE.Vector3, to: THREE.Vector3): void {
@@ -231,7 +255,21 @@ export class Effects {
 
     if (this.muzzleTime > 0) {
       this.muzzleTime -= dt;
-      if (this.muzzleTime <= 0) this.muzzleLight.intensity = 0;
+      if (this.muzzleTime <= 0) {
+        this.muzzleLight.intensity = 0;
+        this.muzzleLight.distance = 9;
+      }
+    }
+    if (this.fireballT >= 0) {
+      this.fireballT += dt;
+      const t = this.fireballT / 0.7;
+      if (t >= 1) {
+        this.fireball.visible = false;
+        this.fireballT = -1;
+      } else {
+        this.fireball.scale.setScalar(1 + t * 9);
+        this.fireballMat.opacity = 1 - t;
+      }
     }
   }
 
@@ -242,6 +280,8 @@ export class Effects {
     this.pLife.fill(0);
     this.pPos.fill(HIDDEN_Y);
     this.muzzleLight.intensity = 0;
+    this.fireball.visible = false;
+    this.fireballT = -1;
   }
 }
 

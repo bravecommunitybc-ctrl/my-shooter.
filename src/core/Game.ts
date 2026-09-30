@@ -1,20 +1,22 @@
 import * as THREE from 'three';
-import { BotManager, type ObjectiveView } from '../ai/BotManager';
+import { BotManager } from '../ai/BotManager';
 import { NavGraph } from '../ai/NavGraph';
-import { CONFIG, type Team } from '../config';
+import { CONFIG, TEAM_NAMES_RU, type Team } from '../config';
 import { Actor } from '../entities/Actor';
 import { ActorModel } from '../entities/ActorModel';
 import { separateActors, stepMovement } from '../entities/Movement';
 import { Player } from '../entities/Player';
 import { Input } from '../input/Input';
 import { CollisionWorld } from '../physics/CollisionWorld';
+import { RoundManager } from '../round/RoundManager';
 import { Hud } from '../ui/Hud';
 import { Menu } from '../ui/Menu';
 import { Effects } from '../weapons/Effects';
 import { ViewModel } from '../weapons/ViewModel';
+import { Weapon } from '../weapons/Weapon';
 import { WeaponSystem } from '../weapons/WeaponSystem';
 import { buildEnvironment, buildMap } from '../world/MapBuilder';
-import type { MapDef } from '../world/MapDef';
+import type { MapDef, SpawnDef } from '../world/MapDef';
 import { QUARRY } from '../world/maps/quarry';
 import { EventBus } from './EventBus';
 import type { GameEvents } from './events';
@@ -26,9 +28,16 @@ const _v = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 
+function fmtClock(sec: number): string {
+  const s = Math.ceil(sec);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /**
  * Owns the renderer, the world and every system; runs a fixed-step
  * simulation (CONFIG.sim.tickRate) with interpolated rendering.
+ *
+ * Tick order: input/bots → movement → hitboxes → weapons → round/bomb.
  */
 export class Game {
   readonly renderer: THREE.WebGLRenderer;
@@ -42,6 +51,7 @@ export class Game {
   readonly weapons: WeaponSystem;
   readonly effects: Effects;
   readonly viewModel = new ViewModel();
+  readonly round: RoundManager;
 
   actors: Actor[] = [];
   player: Player | null = null;
@@ -50,12 +60,7 @@ export class Game {
   bots!: BotManager;
   /** actor whose eyes the camera uses while the player is dead */
   private spectating: Actor | null = null;
-  /** stage-3 skirmish loop: when to reset positions */
-  private resetAt = 0;
   private specFireHeld = false;
-  private readonly objective: ObjectiveView = {
-    live: true, bomb: 'none', bombPos: new THREE.Vector3(), carrier: null, plantedSite: null, roundTime: 0,
-  };
 
   private readonly menu: Menu;
   private readonly hud: Hud;
@@ -80,7 +85,6 @@ export class Game {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.autoClear = true;
 
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, 16 / 9, 0.05, 500);
     this.scene.add(this.camera);
@@ -88,6 +92,12 @@ export class Game {
 
     this.weapons = new WeaponSystem(this.world, () => this.actors, this.events);
     this.effects = new Effects(this.scene, this.events, (a, out) => this.muzzleOf(a, out));
+    this.round = new RoundManager(this.map, this.events, {
+      actors: () => this.actors,
+      respawn: (a, sp) => this.respawn(a, sp),
+      resetLoadout: (a) => this.resetLoadout(a),
+    });
+    this.scene.add(this.round.bomb.mesh);
 
     this.hud = new Hud(overlay, this.settings);
     this.hud.setVisible(false);
@@ -121,16 +131,20 @@ export class Game {
     requestAnimationFrame(this.frame);
   }
 
+  private get me(): Actor | null {
+    return this.player?.actor ?? null;
+  }
+
   private wireEvents(): void {
     const ev = this.events;
     ev.on('shot', (e) => {
-      if (this.player && e.shooter === this.player.actor) this.viewModel.onShot();
+      if (e.shooter === this.me) this.viewModel.onShot();
     });
     ev.on('melee', (e) => {
-      if (this.player && e.actor === this.player.actor) this.viewModel.onMelee(e.actor.weapon.nextFireTime - this.time > 0.6);
+      if (e.actor === this.me) this.viewModel.onMelee(e.actor.weapon.nextFireTime - this.time > 0.6);
     });
     ev.on('damage', (e) => {
-      const me = this.player?.actor;
+      const me = this.me;
       if (!me) return;
       if (e.attacker === me && e.victim !== me) this.hud.hit(e.zone === 'head', !e.victim.alive, this.realTime);
       if (e.victim === me && e.attacker) {
@@ -143,7 +157,48 @@ export class Game {
       }
     });
     ev.on('land', (e) => {
-      if (this.player && e.actor === this.player.actor) this.viewModel.onLand(e.speed);
+      if (e.actor === this.me) this.viewModel.onLand(e.speed);
+    });
+    ev.on('roundPhase', (e) => {
+      if (e.phase === 'buy') {
+        this.bots.newRound();
+        this.equipBots();
+        this.effects.clear();
+        this.spectating = null;
+        const me = this.me;
+        if (me) {
+          const side = me.team === 'attack' ? 'Атака: заложите Pulse Charge на A или B' : 'Защита: не дайте заложить заряд';
+          this.hud.message(`Раунд ${e.round}`, 3, this.realTime, side);
+        }
+      } else if (e.phase === 'live') {
+        this.hud.message('В бой!', 1.2, this.realTime);
+      }
+    });
+    ev.on('roundEnd', (e) => {
+      const me = this.me;
+      const won = me ? e.winner === me.team : false;
+      this.hud.message(won ? 'Раунд выигран' : 'Раунд проигран', 4.5, this.realTime, this.round.describeEnd());
+    });
+    ev.on('bombPlanted', (e) => {
+      this.hud.message(`Заряд заложен на ${e.site}`, 2.5, this.realTime);
+    });
+    ev.on('bombExploded', (e) => this.effects.explosion(e.pos));
+    ev.on('halftime', () => {
+      for (const a of this.actors) this.rebuildModel(a);
+      const me = this.me;
+      if (me) this.viewModel.setTeam(me.team);
+      this.hud.message('Смена сторон', 3, this.realTime, me ? `Теперь вы — ${TEAM_NAMES_RU[me.team]}` : '');
+    });
+    ev.on('matchEnd', (e) => {
+      const me = this.me;
+      const won = me ? e.winner === me.team : false;
+      const s = this.round.score;
+      const mine = me ? s[me.team] : 0;
+      const theirs = me ? s[me.team === 'attack' ? 'defend' : 'attack'] : 0;
+      this.mode = 'over';
+      this.input.capture = false;
+      this.input.exitLock();
+      this.menu.showOver(won ? 'Победа' : 'Поражение', `Счёт ${mine} : ${theirs} · ваш счёт убийств ${me?.kills ?? 0} / смертей ${me?.deaths ?? 0}`);
     });
   }
 
@@ -152,19 +207,53 @@ export class Game {
   private spawnActor(name: string, team: Team, isBot: boolean): Actor {
     const a = new Actor(name, team, isBot);
     this.actors.push(a);
-    const model = new ActorModel(team);
-    this.models.set(a, model);
-    this.scene.add(model.group);
+    this.rebuildModel(a);
     return a;
   }
 
-  private placeActor(a: Actor, x: number, y: number, z: number, yaw: number): void {
+  private rebuildModel(a: Actor): void {
+    const old = this.models.get(a);
+    if (old && old.currentTeam === a.team) return;
+    if (old) this.scene.remove(old.group);
+    const model = new ActorModel(a.team);
+    this.models.set(a, model);
+    this.scene.add(model.group);
+  }
+
+  private respawn(a: Actor, sp: SpawnDef): void {
     a.resetForRound();
-    a.pos.set(x, y, z);
+    a.pos.set(sp.pos[0], sp.pos[1], sp.pos[2]);
     a.prevPos.copy(a.pos);
-    a.yaw = yaw;
+    a.yaw = sp.yaw;
     a.updateHitboxes();
+    for (const w of [a.loadout.primary, a.loadout.secondary]) {
+      if (!w) continue;
+      w.refill();
+      w.resetState();
+    }
+    a.loadout.melee.resetState();
+    const slot = a.loadout.primary ? 'primary' : 'secondary';
+    this.weapons.switchTo(a, slot, this.time, true);
     this.models.get(a)?.resetPose();
+  }
+
+  private resetLoadout(a: Actor): void {
+    a.loadout.primary = null;
+    a.loadout.secondary = new Weapon('hornet');
+    a.armor = 0;
+    a.helmet = false;
+    a.hasKit = false;
+    a.currentSlot = 'secondary';
+    a.lastSlot = 'melee';
+  }
+
+  /** temporary loadouts until the economy lands (stage 5) */
+  private equipBots(): void {
+    for (const a of this.actors) {
+      if (!a.loadout.primary) this.weapons.give(a, Math.random() < 0.15 ? 'longbow' : 'kestrel', this.time);
+      a.armor = 100;
+      a.helmet = true;
+    }
   }
 
   private startMatch(): void {
@@ -177,7 +266,7 @@ export class Game {
     const enemy: Team = me.team === 'attack' ? 'defend' : 'attack';
     for (let i = 0; i < 4; i++) this.bots.add(this.spawnActor(names.pop() ?? `Bot ${i}`, me.team, true), skill);
     for (let i = 0; i < 5; i++) this.bots.add(this.spawnActor(names.pop() ?? `Bot ${i + 4}`, enemy, true), skill);
-    this.startSkirmishRound();
+    this.round.startMatch(this.time);
 
     this.mode = 'playing';
     this.menu.hide();
@@ -188,33 +277,14 @@ export class Game {
     this.input.requestLock();
   }
 
-  /** stage-3 loop: everyone back to spawn with a rifle */
-  private startSkirmishRound(): void {
-    const idx: Record<Team, number> = { attack: 0, defend: 0 };
-    for (const a of this.actors) {
-      const spawns = this.map.spawns[a.team];
-      const sp = spawns[idx[a.team]++ % spawns.length];
-      this.placeActor(a, sp.pos[0], sp.pos[1], sp.pos[2], sp.yaw);
-      a.armor = 100;
-      a.helmet = true;
-      a.loadout.secondary?.refill();
-      if (a.isBot && idx[a.team] === 2) this.weapons.give(a, 'longbow', this.time);
-      else this.weapons.give(a, 'kestrel', this.time);
-      a.weapon.resetState();
-    }
-    this.bots.newRound();
-    this.spectating = null;
-    this.resetAt = 0;
-    this.hud.message('Бой', 1.5, this.realTime, `Цель атаки ботов: ${this.bots.targetSite.name}`);
-  }
-
   private clearMatch(): void {
     for (const m of this.models.values()) this.scene.remove(m.group);
     this.models.clear();
     this.bots?.clear();
+    this.round.bomb.reset();
     this.actors = [];
-    this.spectating = null;
     this.player = null;
+    this.spectating = null;
     this.time = 0;
     this.acc = 0;
     this.effects.clear();
@@ -265,6 +335,7 @@ export class Game {
     this.camera.fov = s.fov;
     this.camera.updateProjectionMatrix();
     this.hud.applySettings(s);
+    this.bots?.setSkill(CONFIG.bots.difficulty[s.difficulty]);
   }
 
   // ─── loop ─────────────────────────────────────────────────────────
@@ -299,16 +370,29 @@ export class Game {
     this.render(dt, alpha);
   };
 
+  /** dev/testing: advance the simulation without rendering */
+  simulate(seconds: number): void {
+    const n = Math.round(seconds / this.fixedDt);
+    for (let i = 0; i < n && this.mode !== 'over'; i++) this.tick(this.fixedDt);
+  }
+
   private tick(dt: number): void {
     this.time += dt;
     const t = this.time;
-    this.player?.readIntent(false);
-    this.objective.roundTime = t;
-    this.bots.update(dt, t, this.objective, false);
+    const frozen = this.round.frozen;
+    this.player?.readIntent(frozen);
+    this.bots.update(dt, t, this.round.objective, frozen);
 
+    const bomb = this.round.bomb;
     for (const a of this.actors) {
       a.prevPos.copy(a.pos);
       if (!a.alive) continue;
+      if (bomb.isBusy(a)) {
+        // planting / defusing roots you in place
+        a.intent.forward = a.intent.right = 0;
+        a.intent.jump = false;
+        a.weaponIntent.fire = false;
+      }
       const r = stepMovement(a, a.intent, dt, this.world, this.weapons.mobility(a));
       if (r.landedSpeed > 2) this.events.emit('land', { actor: a, speed: r.landedSpeed });
       this.trackFootsteps(a, dt);
@@ -316,25 +400,8 @@ export class Game {
     separateActors(this.actors, this.world);
     for (const a of this.actors) a.updateHitboxes();
     for (const a of this.actors) this.weapons.update(a, dt, t);
-
-    // skirmish: reset when a team is wiped out
-    if (!this.resetAt) {
-      const aliveA = this.actors.some((a) => a.alive && a.team === 'attack');
-      const aliveD = this.actors.some((a) => a.alive && a.team === 'defend');
-      if (!aliveA || !aliveD) {
-        this.resetAt = t + 4;
-        this.hud.message(aliveA ? 'Атака победила' : 'Защита победила', 3, this.realTime);
-      }
-    } else if (t >= this.resetAt) {
-      this.startSkirmishRound();
-    }
+    this.round.update(dt, t);
     this.updateSpectator();
-  }
-
-  /** dev/testing: advance the simulation without rendering */
-  simulate(seconds: number): void {
-    const n = Math.round(seconds / this.fixedDt);
-    for (let i = 0; i < n; i++) this.tick(this.fixedDt);
   }
 
   /** footstep events for audio + bot hearing (walking/crouching is silent) */
@@ -354,7 +421,7 @@ export class Game {
   }
 
   private updateSpectator(): void {
-    const me = this.player?.actor;
+    const me = this.me;
     if (!me || me.alive) {
       this.spectating = null;
       return;
@@ -375,7 +442,7 @@ export class Game {
   }
 
   private muzzleOf(a: Actor, out: THREE.Vector3): THREE.Vector3 {
-    if (this.player && a === this.player.actor) return this.viewModel.muzzleWorld(this.camera, out);
+    if (a === this.me) return this.viewModel.muzzleWorld(this.camera, out);
     a.eyePosition(out);
     a.viewDir(_fwd);
     _right.set(Math.cos(a.yaw), 0, -Math.sin(a.yaw));
@@ -391,7 +458,6 @@ export class Game {
       p.kickYaw = w.recoilYaw * w.stats.recoil.viewKick;
       const spec = !a.alive ? this.spectating : null;
       if (spec) {
-        spec.eyePosition(this.camera.position);
         _v.lerpVectors(spec.prevPos, spec.pos, alpha);
         this.camera.position.set(_v.x, _v.y + spec.eyeHeight, _v.z);
         this.camera.rotation.set(spec.pitch, spec.yaw, 0, 'YXZ');
@@ -400,7 +466,7 @@ export class Game {
         p.updateCamera(this.camera, alpha);
         this.hud.setSpectate(a.alive ? '' : 'Вы погибли');
       }
-      const fov = w.scoped && w.stats.scope ? w.stats.scope.fov : this.settings.fov;
+      const fov = a.alive && w.scoped && w.stats.scope ? w.stats.scope.fov : this.settings.fov;
       if (this.camera.fov !== fov) {
         this.camera.fov = fov;
         this.camera.updateProjectionMatrix();
@@ -435,6 +501,8 @@ export class Game {
     const hud = this.hud;
     const w = a.weapon;
     const st = w.stats;
+    const round = this.round;
+    const bomb = round.bomb;
     hud.setVitals(a.hp, a.armor, a.helmet);
     const L = a.loadout;
     const slot = (key: string, label: string, on: boolean, has: boolean) =>
@@ -448,11 +516,41 @@ export class Game {
         slot('2', L.secondary?.stats.name ?? '', a.currentSlot === 'secondary', !!L.secondary) +
         slot('3', L.melee.stats.name, a.currentSlot === 'melee', true),
     );
-    hud.setScope(w.scoped);
+    hud.setBombCarried(a.hasBomb);
+    hud.setScope(a.alive && w.scoped);
     const inacc = this.weapons.inaccuracy(a, w);
     const px = (Math.tan(inacc) / Math.tan((this.camera.fov * Math.PI) / 360)) * (window.innerHeight / 2);
     hud.setCrosshairSpread(Math.min(px, 120), a.alive && !w.scoped && !st.scope);
-    hud.setDebug(`${this.fps} FPS · ${a.horizontalSpeed().toFixed(1)} м/с`);
+
+    const alive = (t: Team) => this.actors.filter((x) => x.alive && x.team === t).length;
+    const planted = bomb.status === 'planted';
+    hud.setTop({
+      attackScore: round.score.attack,
+      defendScore: round.score.defend,
+      attackAlive: alive('attack'),
+      defendAlive: alive('defend'),
+      timer: round.phase === 'buy' ? `${fmtClock(round.clock(this.time))}` : fmtClock(round.clock(this.time)),
+      bomb: planted && round.phase === 'live',
+      round: round.round,
+      playerTeam: a.team,
+    });
+
+    // plant / defuse progress + hints
+    if (bomb.planter === a && bomb.plantProgress > 0) {
+      hud.setProgress('Закладка заряда…', bomb.plantProgress / CONFIG.bomb.plantTime);
+    } else if (bomb.defuser === a && bomb.defuseProgress > 0) {
+      hud.setProgress(a.hasKit ? 'Обезвреживание (набор сапёра)…' : 'Обезвреживание…', bomb.defuseProgress / bomb.defuseTime(a));
+    } else {
+      hud.setProgress(null, 0);
+    }
+    let hint = '';
+    if (round.phase === 'buy') hint = `Фаза покупки · ${Math.ceil(round.clock(this.time))} с`;
+    else if (round.phase === 'live' && a.alive) {
+      if (a.hasBomb && bomb.canPlant(a) && bomb.plantProgress === 0) hint = 'Удерживайте E — заложить заряд';
+      else if (a.team === 'defend' && bomb.canDefuse(a) && bomb.defuseProgress === 0) hint = 'Удерживайте E — обезвредить заряд';
+    }
+    hud.setHint(hint);
+    hud.setDebug(`${this.fps} FPS`);
   }
 
   private countFps(dt: number): void {
