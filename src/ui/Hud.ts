@@ -58,6 +58,8 @@ export class Hud {
   private readonly hint: HTMLDivElement;
   private readonly bombIcon: HTMLDivElement;
   private readonly spectate: HTMLDivElement;
+  private readonly rewardEl: HTMLDivElement;
+  private rewardUntil = 0;
   private hitUntil = 0;
   private damageUntil = 0;
   private cache = new Map<string, string>();
@@ -86,6 +88,7 @@ export class Hud {
     div(arBox, 'vital-icon', '⛨');
     this.armor = div(arBox, 'vital-num');
     this.money = div(this.root, 'hud-money');
+    this.rewardEl = div(this.root, 'hud-reward');
 
     const weapon = div(this.root, 'hud-weapon');
     this.weaponName = div(weapon, 'weapon-name');
@@ -227,6 +230,12 @@ export class Hud {
     this.spectate.style.display = text ? 'block' : 'none';
   }
 
+  reward(text: string, now: number): void {
+    this.rewardEl.textContent = text;
+    this.rewardEl.style.opacity = '1';
+    this.rewardUntil = now + 2;
+  }
+
   message(text: string, seconds: number, now: number, sub = ''): void {
     this.center.textContent = text;
     this.center.style.opacity = '1';
@@ -244,6 +253,10 @@ export class Hud {
     if (this.subUntil && now > this.subUntil) {
       this.sub.style.opacity = '0';
       this.subUntil = 0;
+    }
+    if (this.rewardUntil && now > this.rewardUntil) {
+      this.rewardEl.style.opacity = '0';
+      this.rewardUntil = 0;
     }
     if (this.hitUntil && now > this.hitUntil) {
       this.hitmarker.style.opacity = '0';

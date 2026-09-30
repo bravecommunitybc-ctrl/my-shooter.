@@ -29,7 +29,7 @@ export class Player {
   }
 
   /** Writes the movement intent for this tick. */
-  readIntent(frozen: boolean): void {
+  readIntent(frozen: boolean, menuOpen = false): void {
     const i = this.input;
     const a = this.actor;
     const it = a.intent;
@@ -37,13 +37,18 @@ export class Player {
     const jumpTap = i.consume('jump');
     const fireTap = i.consume('fire');
 
-    if (i.consume('slot1')) wi.switchTo = 'primary';
+    if (menuOpen) {
+      // number keys belong to the buy menu
+      i.consume('slot1');
+      i.consume('slot2');
+      i.consume('slot3');
+    } else if (i.consume('slot1')) wi.switchTo = 'primary';
     else if (i.consume('slot2')) wi.switchTo = 'secondary';
     else if (i.consume('slot3')) wi.switchTo = 'melee';
     else if (i.consume('lastWeapon')) wi.switchTo = a.lastSlot;
     if (i.consume('reload')) wi.reload = true;
     if (i.consume('alt')) wi.alt = true;
-    wi.fire = !frozen && (i.isDown('fire') || fireTap);
+    wi.fire = !frozen && !menuOpen && (i.isDown('fire') || fireTap);
     wi.use = i.isDown('use');
 
     if (frozen || !a.alive) {

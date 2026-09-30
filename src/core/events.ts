@@ -32,4 +32,5 @@ export interface GameEvents {
   bombExploded: { pos: THREE.Vector3 };
   bombBeep: { pos: THREE.Vector3; urgency: number };
   purchase: { actor: Actor; item: string };
+  reward: { actor: Actor; amount: number; reason: string };
 }

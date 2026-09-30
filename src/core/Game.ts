@@ -8,9 +8,13 @@ import { separateActors, stepMovement } from '../entities/Movement';
 import { Player } from '../entities/Player';
 import { Input } from '../input/Input';
 import { CollisionWorld } from '../physics/CollisionWorld';
+import { Economy, type ShopItem } from '../round/Economy';
 import { RoundManager } from '../round/RoundManager';
+import { BuyMenu } from '../ui/BuyMenu';
 import { Hud } from '../ui/Hud';
+import { KillFeed } from '../ui/KillFeed';
 import { Menu } from '../ui/Menu';
+import { Scoreboard } from '../ui/Scoreboard';
 import { Effects } from '../weapons/Effects';
 import { ViewModel } from '../weapons/ViewModel';
 import { Weapon } from '../weapons/Weapon';
@@ -52,6 +56,7 @@ export class Game {
   readonly effects: Effects;
   readonly viewModel = new ViewModel();
   readonly round: RoundManager;
+  readonly economy: Economy;
 
   actors: Actor[] = [];
   player: Player | null = null;
@@ -64,6 +69,9 @@ export class Game {
 
   private readonly menu: Menu;
   private readonly hud: Hud;
+  private readonly killFeed: KillFeed;
+  private readonly scoreboard: Scoreboard;
+  private readonly buyMenu: BuyMenu;
   private mode: Mode = 'menu';
   private readonly fixedDt = 1 / CONFIG.sim.tickRate;
   private acc = 0;
@@ -98,9 +106,13 @@ export class Game {
       resetLoadout: (a) => this.resetLoadout(a),
     });
     this.scene.add(this.round.bomb.mesh);
+    this.economy = new Economy(this.events, () => this.actors, this.weapons, () => this.time);
 
     this.hud = new Hud(overlay, this.settings);
     this.hud.setVisible(false);
+    this.killFeed = new KillFeed(this.hud.root);
+    this.scoreboard = new Scoreboard(this.hud.root);
+    this.buyMenu = new BuyMenu(overlay, this.economy, (item) => this.playerBuy(item));
     this.menu = new Menu(overlay, this.settings, {
       onPlay: () => this.startMatch(),
       onResume: () => this.resume(),
@@ -109,8 +121,10 @@ export class Game {
     });
 
     this.input.onLockChange = (locked) => this.handleLockChange(locked);
+    this.input.onKey = (code) => this.handleKey(code);
     canvas.addEventListener('click', () => {
-      if (this.mode === 'playing' && !this.input.locked) this.input.requestLock();
+      if (this.buyMenu.open) this.closeBuyMenu();
+      else if (this.mode === 'playing' && !this.input.locked) this.input.requestLock();
     });
     window.addEventListener('resize', () => this.resize());
     this.wireEvents();
@@ -159,10 +173,17 @@ export class Game {
     ev.on('land', (e) => {
       if (e.actor === this.me) this.viewModel.onLand(e.speed);
     });
+    ev.on('kill', (e) => {
+      this.killFeed.push(e.killer, e.victim, e.source, e.headshot, this.me, this.realTime);
+      if (e.victim === this.me) this.closeBuyMenu();
+    });
+    ev.on('reward', (e) => {
+      if (e.actor === this.me) this.hud.reward(`+$${e.amount} · ${e.reason}`, this.realTime);
+    });
     ev.on('roundPhase', (e) => {
       if (e.phase === 'buy') {
         this.bots.newRound();
-        this.equipBots();
+        this.botsBuy(e.round);
         this.effects.clear();
         this.spectating = null;
         const me = this.me;
@@ -247,13 +268,53 @@ export class Game {
     a.lastSlot = 'melee';
   }
 
-  /** temporary loadouts until the economy lands (stage 5) */
-  private equipBots(): void {
-    for (const a of this.actors) {
-      if (!a.loadout.primary) this.weapons.give(a, Math.random() < 0.15 ? 'longbow' : 'kestrel', this.time);
-      a.armor = 100;
-      a.helmet = true;
+  private botsBuy(round: number): void {
+    for (const team of ['attack', 'defend'] as Team[]) {
+      const members = this.actors.filter((a) => a.team === team);
+      const avg = members.reduce((s, a) => s + a.money, 0) / Math.max(1, members.length);
+      let sniper = members.some((a) => a.loadout.primary?.id === 'longbow');
+      for (const a of members) {
+        if (!a.isBot) continue;
+        if (this.economy.botBuy(a, round, avg, sniper)) sniper = true;
+      }
     }
+  }
+
+  // ─── buy menu ─────────────────────────────────────────────────────
+
+  private handleKey(code: string): void {
+    if (this.mode !== 'playing') return;
+    if (code === 'KeyB') {
+      if (this.buyMenu.open) this.closeBuyMenu();
+      else this.openBuyMenu();
+    } else if (this.buyMenu.open) {
+      if (code === 'Escape') this.closeBuyMenu();
+      else this.buyMenu.keyBuy(code);
+    }
+  }
+
+  private openBuyMenu(): void {
+    const me = this.me;
+    if (!me || !this.round.canBuy(me, this.time)) {
+      if (me?.alive) this.hud.message('Покупка недоступна', 1.2, this.realTime, 'Только в фазе покупки или первые 20 с раунда на своей базе');
+      return;
+    }
+    this.buyMenu.show();
+    // free the cursor so items can be clicked; unlocking must not pause
+    this.input.exitLock();
+  }
+
+  private closeBuyMenu(): void {
+    if (!this.buyMenu.open) return;
+    this.buyMenu.hide();
+    this.input.clearPresses();
+    if (this.mode === 'playing') this.input.requestLock();
+  }
+
+  private playerBuy(item: ShopItem): void {
+    const me = this.me;
+    if (!me || !this.round.canBuy(me, this.time)) return;
+    this.economy.buy(me, item);
   }
 
   private startMatch(): void {
@@ -288,6 +349,9 @@ export class Game {
     this.time = 0;
     this.acc = 0;
     this.effects.clear();
+    this.killFeed.clear();
+    this.buyMenu.hide();
+    this.scoreboard.setVisible(false);
   }
 
   private resume(): void {
@@ -315,7 +379,7 @@ export class Game {
   }
 
   private handleLockChange(locked: boolean): void {
-    if (!locked && this.mode === 'playing') this.pause();
+    if (!locked && this.mode === 'playing' && !this.buyMenu.open) this.pause();
   }
 
   private enterFullscreenIfWanted(): void {
@@ -380,7 +444,8 @@ export class Game {
     this.time += dt;
     const t = this.time;
     const frozen = this.round.frozen;
-    this.player?.readIntent(frozen);
+    this.player?.readIntent(frozen, this.buyMenu.open);
+    this.input.consume('buy');
     this.bots.update(dt, t, this.round.objective, frozen);
 
     const bomb = this.round.bomb;
@@ -544,12 +609,31 @@ export class Game {
       hud.setProgress(null, 0);
     }
     let hint = '';
-    if (round.phase === 'buy') hint = `Фаза покупки · ${Math.ceil(round.clock(this.time))} с`;
+    if (round.phase === 'buy') hint = `Фаза покупки · ${Math.ceil(round.clock(this.time))} с · B — меню покупки`;
     else if (round.phase === 'live' && a.alive) {
       if (a.hasBomb && bomb.canPlant(a) && bomb.plantProgress === 0) hint = 'Удерживайте E — заложить заряд';
       else if (a.team === 'defend' && bomb.canDefuse(a) && bomb.defuseProgress === 0) hint = 'Удерживайте E — обезвредить заряд';
     }
     hud.setHint(hint);
+    hud.setMoney(a.money);
+    // buy menu lifetime
+    const me = a;
+    if (this.buyMenu.open) {
+      if (!this.round.canBuy(me, this.time)) this.closeBuyMenu();
+      else {
+        const left = round.phase === 'buy' ? round.clock(this.time) : CONFIG.round.buyWindowAfterStart - (this.time - round.liveStart);
+        this.buyMenu.update(me, left);
+      }
+    }
+    const tab = this.input.isDown('scoreboard') || this.mode === 'paused';
+    this.scoreboard.setVisible(tab);
+    if (tab) {
+      this.scoreboard.update(this.actors, round.score, round.round, me, {
+        attack: this.economy.nextLossBonus('attack'),
+        defend: this.economy.nextLossBonus('defend'),
+      });
+    }
+    this.killFeed.update(this.realTime);
     hud.setDebug(`${this.fps} FPS`);
   }
 

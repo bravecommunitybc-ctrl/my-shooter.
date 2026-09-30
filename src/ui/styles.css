@@ -157,3 +157,53 @@ html, body {
 .progress-fill { height: 100%; background: var(--accent); width: 0; }
 .hud-hint { position: absolute; left: 50%; top: 68%; transform: translateX(-50%); font-size: 14px; color: var(--text); background: rgba(10, 12, 16, 0.5); padding: 4px 10px; }
 .hud-spectate { position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%); font-size: 15px; background: rgba(10, 12, 16, 0.6); padding: 6px 14px; text-align: center; }
+
+/* ─── buy menu / killfeed / scoreboard ─────────────── */
+#overlay > .buy-menu { pointer-events: auto; }
+.buy-menu {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--accent);
+  padding: 14px; font-size: 14px;
+}
+.buy-head, .buy-foot { display: flex; justify-content: space-between; align-items: center; }
+.buy-head b { text-transform: uppercase; letter-spacing: 0.12em; }
+.buy-money { color: var(--good); font-weight: 700; font-size: 18px; }
+.buy-foot { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.buy-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.buy-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px; cursor: pointer; text-align: left;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line); color: var(--text); font: 600 15px var(--font);
+}
+.buy-item:hover:not(:disabled) { background: rgba(242, 165, 65, 0.18); border-color: var(--accent); }
+.buy-item span { flex: 1; }
+.buy-item em { font-style: normal; color: var(--good); }
+.buy-item.poor em { color: var(--danger); }
+.buy-item.owned em { color: var(--muted); }
+.buy-item:disabled { opacity: 0.55; cursor: default; }
+.buy-item kbd { font: 700 12px var(--mono); color: var(--muted); width: 16px; }
+
+.killfeed { position: absolute; right: 14px; top: 12px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; font-size: 14px; }
+.kf { background: rgba(10, 12, 16, 0.6); padding: 4px 10px; display: flex; gap: 8px; align-items: center; }
+.kf.kf-me { border: 1px solid rgba(255, 255, 255, 0.7); }
+.kf b.attack { color: var(--attack); }
+.kf b.defend { color: var(--defend); }
+.kf-w { color: var(--muted); font-size: 12px; }
+.kf-w i { color: #ffd24d; font-style: normal; }
+
+.scoreboard {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(640px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); padding: 14px; font-size: 14px;
+}
+.sb-head { text-align: center; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px; margin-bottom: 8px; }
+.sb-team { margin-top: 8px; }
+.sb-title { display: flex; gap: 10px; align-items: baseline; padding: 4px 6px; }
+.sb-title em { margin-left: auto; font-style: normal; color: var(--muted); font-size: 12px; }
+.sb-team.attack .sb-title { border-bottom: 2px solid var(--attack); }
+.sb-team.defend .sb-title { border-bottom: 2px solid var(--defend); }
+.sb-team table { width: 100%; border-collapse: collapse; }
+.sb-team th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 6px; }
+.sb-team td { padding: 4px 6px; }
+.sb-team td:first-child { width: 20px; color: var(--accent); }
+.sb-team tr.me td { background: rgba(255, 255, 255, 0.08); }
+.sb-team tr.dead td { color: var(--muted); }
+.hud-reward { position: absolute; left: 20px; bottom: 104px; font: 700 16px var(--font); color: var(--good); opacity: 0; transition: opacity 0.4s; }
