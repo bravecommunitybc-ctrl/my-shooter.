@@ -94,3 +94,66 @@ html, body {
   .settings-grid { grid-template-columns: 1fr; }
   .controls-help { grid-template-columns: 1fr; }
 }
+
+/* ─── hud elements ─────────────────────────────────── */
+.hud-sub {
+  position: absolute; left: 50%; top: calc(26% + 44px); transform: translateX(-50%);
+  font-size: 16px; color: var(--muted); opacity: 0; transition: opacity 0.3s; text-align: center;
+}
+.hud-vitals { position: absolute; left: 20px; bottom: 18px; display: flex; gap: 18px; }
+.vital { display: flex; align-items: center; gap: 8px; background: rgba(10, 12, 16, 0.55); padding: 6px 12px 6px 10px; position: relative; }
+.vital-icon { font-size: 18px; color: var(--muted); }
+.vital-num { font: 700 30px/1 var(--font); min-width: 58px; }
+.vital-num.low { color: var(--danger); }
+.vital-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255, 255, 255, 0.1); }
+.vital-fill { height: 100%; background: var(--text); width: 100%; transition: width 0.15s; }
+.hud-money { position: absolute; left: 20px; bottom: 76px; font: 700 22px var(--font); color: var(--good); }
+.hud-weapon { position: absolute; right: 22px; bottom: 18px; text-align: right; }
+.weapon-name { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.ammo b { font: 700 38px/1 var(--font); }
+.ammo b.empty { color: var(--danger); }
+.ammo span { font: 600 18px var(--font); color: var(--muted); margin-left: 6px; }
+.slots { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; font-size: 12px; }
+.slots span { padding: 2px 6px; background: rgba(10, 12, 16, 0.5); color: var(--muted); }
+.slots span.on { color: #111; background: var(--text); }
+.bomb-carried { margin-top: 6px; color: var(--attack); font-weight: 700; font-size: 13px; letter-spacing: 0.08em; }
+
+.hud-top { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: stretch; gap: 2px; }
+.team-box { display: flex; align-items: center; gap: 10px; padding: 4px 12px; background: rgba(10, 12, 16, 0.6); font-size: 13px; }
+.team-box .score { font: 800 26px/1 var(--font); }
+.team-box.attack { border-bottom: 3px solid var(--attack); }
+.team-box.defend { border-bottom: 3px solid var(--defend); }
+.team-box.attack .score { color: var(--attack); }
+.team-box.defend .score { color: var(--defend); }
+.team-box .alive { color: var(--muted); min-width: 92px; }
+.team-box.attack .alive { text-align: right; }
+.timer-box { background: rgba(10, 12, 16, 0.75); padding: 4px 16px; text-align: center; min-width: 96px; }
+.timer { font: 700 24px/1.1 var(--mono); }
+.timer.bomb { color: var(--danger); animation: pulse 0.8s infinite; }
+.round-lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+@keyframes pulse { 50% { opacity: 0.55; } }
+
+.hitmarker { position: absolute; left: 50%; top: 50%; opacity: 0; transition: opacity 0.12s; }
+.hitmarker i { position: absolute; width: 9px; height: 2px; background: #fff; box-shadow: 0 0 2px #000; }
+.hitmarker i:nth-child(1) { left: 5px; top: 5px; transform: rotate(45deg); }
+.hitmarker i:nth-child(2) { left: -14px; top: 5px; transform: rotate(-45deg); }
+.hitmarker i:nth-child(3) { left: 5px; top: -7px; transform: rotate(-45deg); }
+.hitmarker i:nth-child(4) { left: -14px; top: -7px; transform: rotate(45deg); }
+.hitmarker.head i { background: #ffd24d; }
+.hitmarker.kill i { background: var(--danger); width: 12px; }
+
+.hud-scope {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 50%, transparent 0, transparent 38vmin, rgba(0, 0, 0, 0.9) 38.3vmin, #000 44vmin);
+}
+.scope-h, .scope-v { position: absolute; background: rgba(0, 0, 0, 0.9); }
+.scope-h { left: 0; right: 0; top: 50%; height: 1px; }
+.scope-v { top: 0; bottom: 0; left: 50%; width: 1px; }
+.hud-damage { position: absolute; inset: 0; opacity: 0; transition: opacity 0.4s; mask-image: radial-gradient(circle, transparent 35%, #000 75%); -webkit-mask-image: radial-gradient(circle, transparent 35%, #000 75%); }
+
+.hud-progress { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); width: 280px; text-align: center; }
+.progress-label { font-size: 13px; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 4px; }
+.progress-bar { height: 6px; background: rgba(255, 255, 255, 0.15); }
+.progress-fill { height: 100%; background: var(--accent); width: 0; }
+.hud-hint { position: absolute; left: 50%; top: 68%; transform: translateX(-50%); font-size: 14px; color: var(--text); background: rgba(10, 12, 16, 0.5); padding: 4px 10px; }
+.hud-spectate { position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%); font-size: 15px; background: rgba(10, 12, 16, 0.6); padding: 6px 14px; text-align: center; }

@@ -1,11 +1,23 @@
 import * as THREE from 'three';
 import { CONFIG, type HitZone, type Slot, type Team } from '../config';
 import { AABB } from '../physics/AABB';
+import { Weapon } from '../weapons/Weapon';
 import type { MoveIntent } from './Movement';
 
 const M = CONFIG.movement;
 
 let nextId = 1;
+
+export interface WeaponIntent {
+  /** trigger held (or tapped since last tick) */
+  fire: boolean;
+  /** alt fire / scope, edge */
+  alt: boolean;
+  reload: boolean;
+  switchTo: Slot | null;
+  /** plant / defuse held */
+  use: boolean;
+}
 
 /**
  * Shared state for the human player and bots: transform, physics,
@@ -56,13 +68,28 @@ export class Actor {
   /** hitboxes, refreshed after movement */
   readonly hitboxes: Record<HitZone, AABB> = { head: new AABB(), body: new AABB(), legs: new AABB() };
 
-  /** set by the weapon system */
+  /** weapons carried; knife can never be dropped */
+  readonly loadout: { primary: Weapon | null; secondary: Weapon | null; melee: Weapon } = {
+    primary: null,
+    secondary: new Weapon('hornet'),
+    melee: new Weapon('talon'),
+  };
   currentSlot: Slot = 'secondary';
+  /** 0..1 — bots cancel this share of recoil (humans do it with the mouse) */
+  recoilControl = 0;
+  lastSlot: Slot = 'melee';
+
+  /** weapon requests for this tick, written by the controller */
+  readonly weaponIntent: WeaponIntent = { fire: false, alt: false, reload: false, switchTo: null, use: false };
 
   constructor(name: string, team: Team, isBot: boolean) {
     this.name = name;
     this.team = team;
     this.isBot = isBot;
+  }
+
+  get weapon(): Weapon {
+    return this.loadout[this.currentSlot] ?? this.loadout.melee;
   }
 
   eyePosition(out: THREE.Vector3): THREE.Vector3 {
